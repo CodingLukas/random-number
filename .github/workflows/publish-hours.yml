@@ -1,0 +1,75 @@
+name: Publish Hours
+
+on:
+  schedule:
+    - cron: '0 2-23/3 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: publish-hours
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish-hours:
+    runs-on: ubuntu-latest
+
+    env:
+      TOGGL_API_TOKEN: ${{ secrets.TOGGL_API_TOKEN }}
+      GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+      GIST_ID: ${{ vars.HOURS_GIST_ID }}
+      TOGGL_WORKSPACE_ID: 8402728
+      TOGGL_PROJECT_ID: 220893526
+      TZ: Asia/Dubai
+
+    steps:
+      - name: Check configuration
+        run: |
+          missing=""
+          [ -n "$TOGGL_API_TOKEN" ] || missing="$missing secrets.TOGGL_API_TOKEN"
+          [ -n "$GIST_TOKEN" ] || missing="$missing secrets.GIST_TOKEN"
+          [ -n "$GIST_ID" ] || missing="$missing vars.HOURS_GIST_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing configuration:$missing"
+            exit 1
+          fi
+
+      - name: Fetch this month's hours from Toggl
+        run: |
+          MONTH_START=$(date +%Y-%m-01)
+          MONTH_END=$(date -d "$MONTH_START +1 month -1 day" +%Y-%m-%d)
+
+          curl -sS --fail-with-body \
+            -u "$TOGGL_API_TOKEN:api_token" \
+            -H 'Content-Type: application/json' \
+            -d "{\"start_date\":\"$MONTH_START\",\"end_date\":\"$MONTH_END\",\"project_ids\":[$TOGGL_PROJECT_ID]}" \
+            "https://api.track.toggl.com/reports/api/v3/workspace/$TOGGL_WORKSPACE_ID/summary/time_entries" \
+            -o summary.json
+
+          jq -n \
+            --slurpfile summary summary.json \
+            --arg month "$(date +%Y-%m)" \
+            --arg updated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              month: $month,
+              hours: ((([$summary[0].groups[]?.sub_groups[]?.seconds] | add // 0) / 36) | round / 100),
+              updated_at: $updated_at
+            }' > hours.json
+
+          cat hours.json
+
+      - name: Publish to gist
+        run: |
+          jq -n --rawfile content hours.json '{files: {"hours.json": {content: $content}}}' > payload.json
+
+          curl -sS --fail-with-body -o /dev/null \
+            -X PATCH \
+            -H "Authorization: Bearer $GIST_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            --data @payload.json \
+            "https://api.github.com/gists/$GIST_ID"
+
+          echo "Published: https://gist.githubusercontent.com/${{ github.repository_owner }}/$GIST_ID/raw/hours.json"
