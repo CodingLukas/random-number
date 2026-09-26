@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   publish-hours:
@@ -18,8 +18,6 @@ jobs:
 
     env:
       TOGGL_API_TOKEN: ${{ secrets.TOGGL_API_TOKEN }}
-      GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
-      GIST_ID: ${{ vars.HOURS_GIST_ID }}
       TOGGL_WORKSPACE_ID: 8402728
       TOGGL_PROJECT_ID: 220893526
       TZ: Asia/Dubai
@@ -27,14 +25,13 @@ jobs:
     steps:
       - name: Check configuration
         run: |
-          missing=""
-          [ -n "$TOGGL_API_TOKEN" ] || missing="$missing secrets.TOGGL_API_TOKEN"
-          [ -n "$GIST_TOKEN" ] || missing="$missing secrets.GIST_TOKEN"
-          [ -n "$GIST_ID" ] || missing="$missing vars.HOURS_GIST_ID"
-          if [ -n "$missing" ]; then
-            echo "::error::Missing configuration:$missing"
+          if [ -z "$TOGGL_API_TOKEN" ]; then
+            echo "::error::Missing configuration: secrets.TOGGL_API_TOKEN"
             exit 1
           fi
+
+      - name: Check out repository
+        uses: actions/checkout@v4
 
       - name: Fetch this month's hours from Toggl
         run: |
@@ -46,10 +43,10 @@ jobs:
             -H 'Content-Type: application/json' \
             -d "{\"start_date\":\"$MONTH_START\",\"end_date\":\"$MONTH_END\",\"project_ids\":[$TOGGL_PROJECT_ID]}" \
             "https://api.track.toggl.com/reports/api/v3/workspace/$TOGGL_WORKSPACE_ID/summary/time_entries" \
-            -o summary.json
+            -o "$RUNNER_TEMP/summary.json"
 
           jq -n \
-            --slurpfile summary summary.json \
+            --slurpfile summary "$RUNNER_TEMP/summary.json" \
             --arg month "$(date -d yesterday +%Y-%m)" \
             --arg updated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             '{
@@ -60,16 +57,12 @@ jobs:
 
           cat hours.json
 
-      - name: Publish to gist
+      - name: Commit to repository
         run: |
-          jq -n --rawfile content hours.json '{files: {"hours.json": {content: $content}}}' > payload.json
+          git config user.name codinglukas
+          git config user.email lukasimbm@gmail.com
+          git add hours.json
+          git commit -m "chore: update hours"
+          git push
 
-          curl -sS --fail-with-body -o /dev/null \
-            -X PATCH \
-            -H "Authorization: Bearer $GIST_TOKEN" \
-            -H 'Accept: application/vnd.github+json' \
-            -H 'X-GitHub-Api-Version: 2022-11-28' \
-            --data @payload.json \
-            "https://api.github.com/gists/$GIST_ID"
-
-          echo "Published: https://gist.githubusercontent.com/${{ github.repository_owner }}/$GIST_ID/raw/hours.json"
+          echo "Published: https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/hours.json"
