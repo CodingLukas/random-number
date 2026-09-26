@@ -2,7 +2,7 @@ name: Publish Hours
 
 on:
   schedule:
-    - cron: '50 18 * * *'
+    - cron: '0 20 * * *'
   workflow_dispatch:
 
 concurrency:
@@ -38,7 +38,7 @@ jobs:
 
       - name: Fetch this month's hours from Toggl
         run: |
-          MONTH_START=$(date +%Y-%m-01)
+          MONTH_START=$(date -d yesterday +%Y-%m-01)
           MONTH_END=$(date -d "$MONTH_START +1 month -1 day" +%Y-%m-%d)
 
           curl -sS --fail-with-body \
@@ -50,7 +50,7 @@ jobs:
 
           jq -n \
             --slurpfile summary summary.json \
-            --arg month "$(date +%Y-%m)" \
+            --arg month "$(date -d yesterday +%Y-%m)" \
             --arg updated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             '{
               month: $month,
